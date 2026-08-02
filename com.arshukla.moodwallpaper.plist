@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.arshukla.moodwallpaper</string>
+
+	<!-- Template. install.sh substitutes __ROOT__ and __WAKE_SECONDS__ and
+	     writes the result to ~/Library/LaunchAgents/. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>__ROOT__/mood-wallpaper.sh</string>
+	</array>
+
+	<!-- Fires at login, then every __WAKE_SECONDS__ seconds. launchd also fires
+	     a missed interval shortly after waking from sleep or unlocking, which is
+	     what gives us the "on wake/unlock" behaviour without a second agent.
+	     The real once-per-MIN_INTERVAL_MINUTES cap is enforced inside the
+	     script, so these extra fires cost one bash startup (~30ms) and exit. -->
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StartInterval</key>
+	<integer>__WAKE_SECONDS__</integer>
+
+	<!-- Never keep a process alive. -->
+	<key>KeepAlive</key>
+	<false/>
+
+	<!-- Stay out of the way: lowest CPU/IO priority, and don't let this job
+	     be a reason to keep the machine awake. -->
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>Nice</key>
+	<integer>10</integer>
+	<key>LowPriorityIO</key>
+	<true/>
+	<key>LowPriorityBackgroundIO</key>
+	<true/>
+
+	<!-- The script's own mood.log is the useful record and it self-rotates.
+	     These two only ever catch crashes and permission errors, so they stay
+	     small; install.sh truncates them on every reinstall. -->
+	<key>StandardOutPath</key>
+	<string>__ROOT__/state/launchd.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>__ROOT__/state/launchd.err.log</string>
+</dict>
+</plist>

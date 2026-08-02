@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.arshukla.moodbar</string>
+
+	<!-- Template. install.sh substitutes __ROOT__ and writes the result to
+	     ~/Library/LaunchAgents/. Optional: MOODBAR=0 ./install.sh skips it. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>__ROOT__/bin/moodbar</string>
+	</array>
+
+	<!-- Unlike the wallpaper job, this one is meant to stay resident: a menu
+	     bar item exists only as long as its process does. It sleeps on a
+	     kqueue watch over state/ and wakes when a run rewrites it. -->
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+
+	<!-- Interactive, not Background: it owns a UI element, and Background
+	     process type would have it throttled and its menu made sluggish. -->
+	<key>ProcessType</key>
+	<string>Interactive</string>
+
+	<key>StandardOutPath</key>
+	<string>__ROOT__/state/moodbar.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>__ROOT__/state/moodbar.err.log</string>
+</dict>
+</plist>

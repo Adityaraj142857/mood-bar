@@ -1,0 +1,108 @@
+# mood-wallpaper configuration
+#
+# Copy this file to config.conf and fill in whichever keys you want:
+#     cp config.conf.example config.conf
+#
+# config.conf is sourced by mood-wallpaper.sh and is the ONLY place keys live.
+# Leave a key blank to skip that provider entirely — with both blank the tool
+# still works, it just falls back to your own images and the offline gradient.
+
+# --- Unsplash (tried first) ------------------------------------------------
+# Get a key at https://unsplash.com/developers
+#   1. "Register as a developer", then "New Application"
+#   2. Accept the API terms, give it any name ("mood-wallpaper")
+#   3. Copy the "Access Key" (NOT the Secret Key) from the app page
+# Demo tier: 50 requests/hour, no review needed. This tool uses at most ~2/hour.
+UNSPLASH_ACCESS_KEY=
+
+# --- Pexels (tried if Unsplash fails) --------------------------------------
+# Get a key at https://www.pexels.com/api/
+#   1. Sign up / log in, click "Get Started"
+#   2. Describe the use ("personal desktop wallpaper script")
+#   3. The key is shown immediately on the dashboard
+# Free tier: 200 requests/hour.
+PEXELS_API_KEY=
+
+# --- Your own images -------------------------------------------------------
+# Drop images into wallpapers/<mood>/ (jpg, jpeg, png, heic or tiff) and a mood
+# with any of them will use one at random, without touching the APIs. Moods
+# with an empty or missing folder fall through to the APIs as usual. That
+# directory is yours: nothing here ever writes to it or deletes from it.
+# Set to 0 to ignore it and always use the APIs.
+PREFER_OWN_IMAGES=1
+
+# --- Anime ------------------------------------------------------------------
+# Percentage of runs that fetch an anime wallpaper from Wallhaven instead of
+# following the normal ladder. Applies to every mood, including ones you've
+# curated — otherwise wallpapers/ would shadow anime permanently. Each mood has
+# its own anime search terms (see anime_queries in lib/fetch-wallpaper.sh).
+#   0   = never
+#   50  = about half the time (default)
+#   100 = always anime, your own images only as a fallback
+# No API key needed. The request is hardcoded to Wallhaven's anime category and
+# SFW-only purity; there is no setting here to change that.
+ANIME_SHARE=50
+
+# --- How often it acts ------------------------------------------------------
+# Minimum minutes between real runs. launchd wakes the script every
+# WAKE_SECONDS (see install.sh) but a wake inside this window costs ~0.01s and
+# exits, so this is the knob that decides how often the wallpaper actually
+# changes. Higher = quieter. 30 is roughly two changes an hour.
+MIN_INTERVAL_MINUTES=30
+
+# Hours (24h clock) during which the mood is forced to "night" and every other
+# signal is ignored. Set NIGHT_START and NIGHT_END to the same value to disable.
+NIGHT_START=23
+NIGHT_END=6
+
+# --- The mood engine --------------------------------------------------------
+# How much better a new mood has to score before the wallpaper actually moves,
+# in tenths of a point. Without it, two moods a fraction apart trade the
+# wallpaper back and forth every interval.
+#   0   = always switch to whatever scores highest (jumpy)
+#   5   = default
+#   15  = stay put unless something clearly changed (calm)
+# Run `mood-wallpaper.sh --explain` to see the scores this is comparing.
+MW_HYSTERESIS=5
+
+# Skip runs while the screen is locked, the display is asleep, or the session
+# isn't the active one. Reading "what are they doing" off a locked machine
+# gives a meaningless answer and burns an API call on a screen nobody can see.
+# Set to 0 to change the wallpaper even while you're away.
+MW_SKIP_WHEN_LOCKED=1
+
+# Set to 0 to stop reading the now-playing track from Spotify / Music. Only
+# affects the music signal; everything else keeps working.
+MW_READ_MUSIC=1
+
+# --- Images -----------------------------------------------------------------
+# How many downloaded images to keep per mood, so a repeated mood doesn't
+# always look identical and there's something to fall back on offline.
+MAX_CACHE_PER_MOOD=5
+
+# When the APIs fail, prefer a recent cached photo over the generated gradient.
+# Set to 0 to always use the gradient when offline.
+FALLBACK_USE_CACHE=1
+
+# --- Appearance -------------------------------------------------------------
+# Set to 0 to leave light/dark mode or the accent color alone.
+MW_SET_DARKMODE=1
+MW_SET_ACCENT=1
+
+# Dark mode is the default. Only the moods listed here go light; every other
+# mood goes dark. Set to "" for dark mode always.
+LIGHT_MOODS="happy energetic"
+
+# --- Housekeeping -----------------------------------------------------------
+# mood.log is rotated to mood.log.1 once it passes this size, so a long-lived
+# install can't quietly fill the disk.
+MAX_LOG_BYTES=1048576
+
+# state/history.tsv keeps this many of the most recent runs. That file is what
+# --report and --feedback read, so a larger number buys a longer memory at
+# roughly 150 bytes a row.
+MAX_HISTORY_ROWS=2000
+
+# Network timeouts, in seconds. Kept short so a dead network costs no time.
+CURL_CONNECT_TIMEOUT=4
+CURL_MAX_TIME=30

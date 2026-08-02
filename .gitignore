@@ -1,0 +1,17 @@
+# Secrets — this file holds your API keys.
+config.conf
+
+# Build output and runtime state.
+bin/
+cache/
+state/
+mood.log
+mood.log.1
+
+# Your own wallpapers stay local: they're large, and they're usually
+# third-party art that isn't yours to redistribute. The folder layout is
+# committed so you know where to drop them.
+wallpapers/*/*
+!wallpapers/*/.gitkeep
+
+.DS_Store
