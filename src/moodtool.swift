@@ -484,6 +484,17 @@ let iconTints: [String: Int] = [
     "blue": 6, "purple": 7, "pink": 8, "graphite": 9, "other": 10,
 ]
 
+/// "#rrggbb" -> CGColor, for the "Other" tint slot.
+func parseHexColor(_ text: String) -> CGColor? {
+    let hex = text.hasPrefix("#") ? String(text.dropFirst()) : text
+    guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return nil }
+    return CGColor(
+        red: CGFloat((value >> 16) & 0xFF) / 255,
+        green: CGFloat((value >> 8) & 0xFF) / 255,
+        blue: CGFloat(value & 0xFF) / 255,
+        alpha: 1)
+}
+
 func iconThemeName(_ value: Int) -> String {
     iconThemes.first { $0.value == value }?.key ?? "unknown(\(value))"
 }
@@ -513,6 +524,161 @@ func reportIconAppearance() {
     print("\(iconThemeName(theme))\t\(iconTintName(tint))")
 }
 
+// MARK: - reading a color out of the wallpaper
+//
+// The mood's accent color is a fixed choice per mood, which is fine for the
+// highlight color but wrong for tinting icons: a "stressed" green sitting on
+// top of a blue wallpaper reads as a mistake, because it is one. The picture is
+// the thing everyone is looking at, so the picture decides the color.
+
+struct HSB {
+    var hue: Double  // 0..1
+    var saturation: Double
+    var brightness: Double
+}
+
+func rgbToHSB(_ r: Double, _ g: Double, _ b: Double) -> HSB {
+    let maxV = max(r, g, b), minV = min(r, g, b)
+    let delta = maxV - minV
+    var hue = 0.0
+    if delta > 0 {
+        if maxV == r {
+            hue = ((g - b) / delta).truncatingRemainder(dividingBy: 6)
+        } else if maxV == g {
+            hue = (b - r) / delta + 2
+        } else {
+            hue = (r - g) / delta + 4
+        }
+        hue /= 6
+        if hue < 0 { hue += 1 }
+    }
+    return HSB(hue: hue, saturation: maxV == 0 ? 0 : delta / maxV, brightness: maxV)
+}
+
+func hsbToRGB(_ c: HSB) -> (Double, Double, Double) {
+    let h = c.hue * 6
+    let i = floor(h)
+    let f = h - i
+    let p = c.brightness * (1 - c.saturation)
+    let q = c.brightness * (1 - c.saturation * f)
+    let t = c.brightness * (1 - c.saturation * (1 - f))
+    switch Int(i) % 6 {
+    case 0: return (c.brightness, t, p)
+    case 1: return (q, c.brightness, p)
+    case 2: return (p, c.brightness, t)
+    case 3: return (p, q, c.brightness)
+    case 4: return (t, p, c.brightness)
+    default: return (c.brightness, p, q)
+    }
+}
+
+/// The colour an image "reads as".
+///
+/// A plain average is useless here — averaging a blue sky against orange skin
+/// gives mud. Instead the hue is a *circular* mean (hues wrap at 360°, so
+/// averaging 350° and 10° has to give 0°, not 180°), weighted by how colourful
+/// each pixel is, with washed-out and near-black pixels excluded from the vote
+/// entirely because their hue is meaningless.
+func dominantTint(ofImage path: String) -> HSB? {
+    let url = URL(fileURLWithPath: path)
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+        let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else { return nil }
+
+    // 64x64 is plenty: this is a hue histogram, not a thumbnail.
+    let side = 64
+    var pixels = [UInt8](repeating: 0, count: side * side * 4)
+    let space = CGColorSpaceCreateDeviceRGB()
+    guard
+        let ctx = CGContext(
+            data: &pixels, width: side, height: side, bitsPerComponent: 8,
+            bytesPerRow: side * 4, space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    else { return nil }
+    ctx.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+
+    var x = 0.0, y = 0.0, weightSum = 0.0
+    var satSum = 0.0, brightSum = 0.0, counted = 0.0
+    for i in stride(from: 0, to: pixels.count, by: 4) {
+        let c = rgbToHSB(
+            Double(pixels[i]) / 255, Double(pixels[i + 1]) / 255, Double(pixels[i + 2]) / 255)
+        // Greys have no hue to contribute, and near-black pixels report wild
+        // hues from tiny channel differences.
+        guard c.saturation > 0.18, c.brightness > 0.15 else { continue }
+        let weight = c.saturation * c.brightness
+        let angle = c.hue * 2 * .pi
+        x += cos(angle) * weight
+        y += sin(angle) * weight
+        weightSum += weight
+        satSum += c.saturation
+        brightSum += c.brightness
+        counted += 1
+    }
+
+    // A genuinely monochrome picture: say so rather than inventing a hue.
+    guard counted > 0, weightSum > 0 else {
+        return HSB(hue: 0, saturation: 0, brightness: 0.5)
+    }
+
+    var hue = atan2(y, x) / (2 * .pi)
+    if hue < 0 { hue += 1 }
+
+    // How much the hues agreed. A picture spread evenly across the wheel gets a
+    // short resultant vector, and deserves a muted tint rather than a confident
+    // one plucked from the average of everything.
+    let coherence = sqrt(x * x + y * y) / weightSum
+    let meanSat = satSum / counted
+    let meanBright = brightSum / counted
+
+    return HSB(
+        hue: hue,
+        saturation: min(0.95, max(0.35, meanSat * (0.5 + coherence))),
+        brightness: min(0.95, max(0.55, meanBright * 1.15)))
+}
+
+/// macOS's eight accent colors, as hues. The accent can only be one of these,
+/// so a wallpaper-derived color has to snap to the closest.
+let accentHues: [(name: String, index: Int, hue: Double)] = [
+    ("red", 0, 0.006), ("orange", 1, 0.075), ("yellow", 2, 0.128),
+    ("green", 3, 0.306), ("blue", 4, 0.586), ("purple", 5, 0.806),
+    ("pink", 6, 0.944),
+]
+
+func nearestAccent(to color: HSB) -> (name: String, index: Int) {
+    // Too grey to call: graphite is the honest answer, and macOS has one.
+    if color.saturation < 0.15 { return ("graphite", -1) }
+    var best = accentHues[0]
+    var bestDistance = 1.0
+    for candidate in accentHues {
+        // Circular distance: red at 0.006 must be near pink at 0.944.
+        let raw = abs(candidate.hue - color.hue)
+        let distance = min(raw, 1 - raw)
+        if distance < bestDistance {
+            bestDistance = distance
+            best = candidate
+        }
+    }
+    return (best.name, best.index)
+}
+
+/// Print what an image should tint to: exact RGB, plus the nearest named accent.
+func reportImageTint(_ path: String) {
+    guard FileManager.default.fileExists(atPath: path) else {
+        die("moodtool: no such file: \(path)")
+    }
+    guard let color = dominantTint(ofImage: path) else {
+        die("moodtool: could not read a color out of \(path)")
+    }
+    let (r, g, b) = hsbToRGB(color)
+    let accent = nearestAccent(to: color)
+    let hex = String(
+        format: "#%02x%02x%02x",
+        Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded()))
+    // "<#rrggbb>\t<accent-name>\t<accent-index>" — the exact color for the icon
+    // tint, and the nearest of the eight for the accent, which can't take more.
+    print("\(hex)\t\(accent.name)\t\(accent.index)")
+}
+
 func setIconAppearance(theme themeName: String, tint tintName: String) {
     guard let theme = iconThemes[themeName] else {
         die("moodtool: unknown icon theme '\(themeName)'; one of: \(iconThemes.keys.sorted().joined(separator: " "))")
@@ -525,7 +691,25 @@ func setIconAppearance(theme themeName: String, tint tintName: String) {
     // A tint only shows through in the tinted themes; setting it under Clear or
     // Default is harmless and means the color is already right if the user
     // switches over later.
-    if let tint = iconTints[tintName] {
+    if tintName.hasPrefix("#") {
+        // An exact color, rather than one of the eight named ones. macOS calls
+        // this "Other": the name enum goes to 10 and the real color rides along
+        // as a CGColor. Snapping a wallpaper to eight buckets loses most of the
+        // point, so this is the path the wallpaper-derived tint takes.
+        guard let color = parseHexColor(tintName) else {
+            die("moodtool: bad tint color '\(tintName)', expected #rrggbb")
+        }
+        cfg.setValue(iconTints["other"]!, forKey: "iconTintColorName")
+        let sel = NSSelectorFromString("setOtherIconTintColor:")
+        guard let method = class_getInstanceMethod(type(of: cfg), sel) else {
+            die("moodtool: this macOS cannot take a custom icon tint color")
+        }
+        // Called through the IMP: the argument is a CGColorRef, and -perform:
+        // only passes objects.
+        typealias SetColor = @convention(c) (AnyObject, Selector, CGColor) -> Void
+        let imp = unsafeBitCast(method_getImplementation(method), to: SetColor.self)
+        imp(cfg, sel, color)
+    } else if let tint = iconTints[tintName] {
         cfg.setValue(tint, forKey: "iconTintColorName")
     }
 
@@ -639,6 +823,9 @@ case "icon-theme":
     setIconAppearance(theme: args[1], tint: args.count >= 3 ? args[2] : "")
 case "icon-theme-current":
     reportIconAppearance()
+case "image-tint":
+    guard args.count >= 2 else { die("usage: moodtool image-tint <image-path>") }
+    reportImageTint(args[1])
 case "json":
     guard args.count >= 2 else { die("usage: moodtool json <keypath>") }
     jsonExtract(args[1])

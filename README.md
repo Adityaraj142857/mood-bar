@@ -165,9 +165,33 @@ MOODBAR=0 ./install.sh
 ## Theming the Dock and desktop icons
 
 Optional, macOS 26+. With `MW_SET_ICON_THEME=1`, every app icon on the machine —
-the Dock, desktop icons, Launchpad, Finder sidebars — is tinted with the mood's
-accent color, so `romantic` turns everything pink and `focused` turns it
-graphite.
+the Dock, desktop icons, widgets, Launchpad, Finder sidebars — is tinted to match
+**the wallpaper that's actually on screen**.
+
+The color comes from the picture, not from the mood. Each mood does have a fixed
+accent color, and using it here was the obvious first implementation and the
+wrong one: `stressed` is green, so a blue wallpaper got green icons and the
+desktop looked broken. The picture is the thing filling the screen, so the
+picture picks the color.
+
+Reading it needs a little care. A plain average of an image is mud — average a
+blue sky against orange skin and you get grey. So `moodtool image-tint`
+downsamples to 64×64, throws out pixels too grey or too dark to have a
+meaningful hue, and takes a **circular** mean of what's left, weighted by how
+colorful each pixel is. Circular because hues wrap: averaging 350° and 10° has
+to give 0°, not 180°. It also measures how much the hues agreed, and mutes the
+result when a picture is spread all over the wheel rather than confidently
+inventing a color from the average of everything.
+
+```console
+$ moodtool image-tint wallpapers/night/night_1.png
+#0b0f8c   blue   4
+```
+
+The icon tint takes that **exact** color — macOS stores a custom RGBA under the
+tint name "Other" — while the accent color snaps to the nearest of macOS's eight,
+which is all that setting can hold. Set `MW_TINT_FROM_WALLPAPER=0` to go back to
+the mood's fixed color.
 
 **This is the only way to theme the Dock.** Dock icons live inside each `.app`
 bundle. The system ones are SIP-protected, and editing a third-party one breaks
@@ -182,8 +206,9 @@ one. System Settings goes through `SLSIconAppearanceConfiguration` in SkyLight,
 and so does `moodtool icon-theme`:
 
 ```sh
-moodtool icon-theme-current      # -> "clear<TAB>other"
-moodtool icon-theme tinted pink  # fetch config, mutate, save, read back
+moodtool icon-theme-current        # -> "clear<TAB>other"
+moodtool icon-theme tinted pink    # a named tint
+moodtool icon-theme tinted "#0b0f8c"  # an exact one, via setOtherIconTintColor:
 ```
 
 SkyLight is a private framework and the enum values aren't published, so they
@@ -317,7 +342,8 @@ list. The knobs you're most likely to touch:
 | `MW_SKIP_WHEN_LOCKED` | `1` | Don't run while the screen is locked or asleep |
 | `LIGHT_MOODS` | `happy energetic` | Moods that go light; everything else dark |
 | `MW_SET_DARKMODE` / `MW_SET_ACCENT` | `1` | Set to `0` to leave appearance alone |
-| `MW_SET_ICON_THEME` | `0` | Tint every app icon (Dock included) with the mood color |
+| `MW_SET_ICON_THEME` | `0` | Tint every app icon (Dock included) to match the desktop |
+| `MW_TINT_FROM_WALLPAPER` | `1` | Take the color from the wallpaper, not the mood table |
 
 ---
 
@@ -333,7 +359,7 @@ lib/set-appearance.sh    dark mode + accent, also verified
 lib/nowplaying.applescript
 src/moodtool.swift       wallpaper store, signals, gradients, JSON, accent
 src/moodbar.swift        the menu bar indicator
-test.sh                  141 tests, hermetic
+test.sh                  153 tests, hermetic
 state/history.tsv        one row per run — what --report reads
 mood.log                 human-readable log, self-rotating
 ```
@@ -349,7 +375,7 @@ Two launchd agents: `com.arshukla.moodwallpaper` (wakes every 15 min, exits) and
 ./test.sh
 ```
 
-141 tests, no API key required; network tests degrade to `SKIP` when offline.
+153 tests, no API key required; network tests degrade to `SKIP` when offline.
 
 They're hermetic. Orchestrator tests run against a throwaway copy of the project
 in `$TMPDIR`, so your real `mood.log`, `state/` and history never move. Engine

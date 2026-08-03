@@ -397,8 +397,52 @@ if "$MOODTOOL" icon-theme-current >/dev/null 2>&1; then
 	out=$(MW_SET_DARKMODE=0 MW_SET_ACCENT=0 MW_SET_ICON_THEME=1 MW_ICON_THEME=off \
 		bash "$SANDBOX/lib/set-appearance.sh" romantic | /usr/bin/cut -f3)
 	check "MW_ICON_THEME=off leaves icons alone" "$out" "off"
+
+	# An exact color, the path a wallpaper-derived tint takes.
+	check "a hex tint is accepted" "$("$MOODTOOL" icon-theme tinted '#3366cc' | /usr/bin/cut -f2)" "other"
+	"$MOODTOOL" icon-theme tinted '#zzz' >/dev/null 2>&1 &&
+		no "a malformed hex tint is rejected" || ok "a malformed hex tint is rejected"
 else
 	skip "icon style (this macOS has no icon appearance setting)"
+fi
+
+echo "== taking the color from the wallpaper"
+# The gradients have known palettes, so the hue they read as is predictable
+# even though each render is jittered.
+"$MOODTOOL" gradient night "$WORK/c-night.jpg" 3 >/dev/null 2>&1
+"$MOODTOOL" gradient happy "$WORK/c-happy.jpg" 3 >/dev/null 2>&1
+out=$("$MOODTOOL" image-tint "$WORK/c-night.jpg")
+check "image-tint returns hex, name and index" "$(printf '%s' "$out" | /usr/bin/awk -F'\t' '{print NF}')" "3"
+hex=$(printf '%s' "$out" | /usr/bin/cut -f1)
+[[ "$hex" =~ ^#[0-9a-f]{6}$ ]] && ok "image-tint returns a #rrggbb color ($hex)" ||
+	no "image-tint returns a #rrggbb color (got '$hex')"
+name=$(printf '%s' "$out" | /usr/bin/cut -f2)
+[[ "$name" == blue || "$name" == purple ]] && ok "a deep blue picture reads as $name" ||
+	no "a deep blue picture reads blue/purple (got '$name')"
+name=$("$MOODTOOL" image-tint "$WORK/c-happy.jpg" | /usr/bin/cut -f2)
+[[ "$name" == red || "$name" == orange || "$name" == yellow || "$name" == pink ]] &&
+	ok "a warm picture reads as $name" || no "a warm picture reads warm (got '$name')"
+# The index has to be one macOS will accept as an accent.
+idx=$("$MOODTOOL" image-tint "$WORK/c-night.jpg" | /usr/bin/cut -f3)
+[[ "$idx" =~ ^(-1|[0-6])$ ]] && ok "the accent index is in range ($idx)" ||
+	no "the accent index is in range (got '$idx')"
+"$MOODTOOL" image-tint "$WORK/does-not-exist.jpg" >/dev/null 2>&1 &&
+	no "a missing image is rejected" || ok "a missing image is rejected"
+
+if "$MOODTOOL" icon-theme-current >/dev/null 2>&1; then
+	# The mood says green; the picture says blue. The picture has to win.
+	out=$(MW_SET_DARKMODE=0 MW_SET_ACCENT=0 MW_SET_ICON_THEME=1 MW_TINT_FROM_WALLPAPER=1 \
+		bash "$SANDBOX/lib/set-appearance.sh" stressed "$WORK/c-night.jpg" | /usr/bin/cut -f3)
+	contains "the wallpaper overrules the mood's color" "$out" "~wp"
+	[[ "$out" == *"/#"* ]] && ok "the exact wallpaper color is used" ||
+		no "the exact wallpaper color is used (got '$out')"
+	out=$(MW_SET_DARKMODE=0 MW_SET_ACCENT=0 MW_SET_ICON_THEME=1 MW_TINT_FROM_WALLPAPER=0 \
+		bash "$SANDBOX/lib/set-appearance.sh" stressed "$WORK/c-night.jpg" | /usr/bin/cut -f3)
+	check "MW_TINT_FROM_WALLPAPER=0 keeps the mood color" "$out" "tinted/green"
+	# No image to read: fall back rather than fail.
+	out=$(MW_SET_DARKMODE=0 MW_SET_ACCENT=0 MW_SET_ICON_THEME=1 MW_TINT_FROM_WALLPAPER=1 \
+		bash "$SANDBOX/lib/set-appearance.sh" stressed "$WORK/does-not-exist.jpg" | /usr/bin/cut -f3)
+	check "a missing wallpaper falls back to the mood color" "$out" "tinted/green"
 fi
 
 echo "== wallpaper: every Space, verified"

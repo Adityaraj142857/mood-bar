@@ -71,6 +71,9 @@ export MW_SET_ACCENT="${MW_SET_ACCENT:-1}"
 # bigger thing to opt into than a wallpaper.
 export MW_SET_ICON_THEME="${MW_SET_ICON_THEME:-0}"
 export MW_ICON_THEME="${MW_ICON_THEME:-tinted}"
+# Take the color from the wallpaper rather than the mood table: the picture is
+# what fills the screen, so it is what the icons have to agree with.
+export MW_TINT_FROM_WALLPAPER="${MW_TINT_FROM_WALLPAPER:-1}"
 
 # Remember the icon style that was in place before this tool ever touched it,
 # once, so uninstall --restore can put it back years later.
@@ -501,7 +504,7 @@ fi
 WP_OK=$(bash "$LIB/set-wallpaper.sh" "$IMG")
 WP_RC=$?
 
-IFS=$'\t' read -r MODE ACCENT ICONS < <(bash "$LIB/set-appearance.sh" "$MOOD")
+IFS=$'\t' read -r MODE ACCENT ICONS < <(bash "$LIB/set-appearance.sh" "$MOOD" "$IMG")
 
 # last-image only advances when the picture really went up, so --verify keeps
 # comparing against the last thing actually applied rather than the last thing

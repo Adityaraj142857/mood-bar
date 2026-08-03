@@ -1,6 +1,6 @@
 #!/bin/bash
-# set-appearance.sh <mood> — match macOS light/dark mode, accent color and icon
-# style to a mood.
+# set-appearance.sh <mood> [wallpaper-image] — match macOS light/dark mode,
+# accent color and icon style to the desktop.
 #
 # Prints:  <mode>\t<accent>\t<icons>
 #   mode    light | dark | off        accent  <color> | off
@@ -11,6 +11,15 @@
 # report a change we did not confirm. "off" means the knob is disabled in
 # config.conf.
 #
+# WHERE THE COLOR COMES FROM
+#
+# Each mood has a fixed accent color, which is a reasonable default but the
+# wrong answer for a desktop: "stressed" is green, and green icons on top of a
+# blue wallpaper look like a bug, because they are one. When a wallpaper is
+# passed in and MW_TINT_FROM_WALLPAPER is on, the picture picks the color
+# instead — it is the thing filling the screen, so it wins. The mood table is
+# the fallback for when there is no image to read.
+#
 # Dark mode flips immediately. The accent color is written to the global domain
 # and a change notification is posted; apps that listen repaint right away, the
 # rest pick it up next launch. That is how System Settings behaves too.
@@ -20,7 +29,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
 MOODTOOL="$ROOT/bin/moodtool"
 
-MOOD="${1:?usage: set-appearance.sh <mood>}"
+MOOD="${1:?usage: set-appearance.sh <mood> [wallpaper-image]}"
+IMAGE="${2:-}"
 
 # AppleAccentColor: -1 graphite, 0 red, 1 orange, 2 yellow, 3 green,
 #                    4 blue, 5 purple, 6 pink.
@@ -37,6 +47,23 @@ night) ACCENT=5 ACCENT_NAME=purple ;;
 stressed) ACCENT=3 ACCENT_NAME=green ;;
 *) ACCENT=4 ACCENT_NAME=blue ;;
 esac
+
+# The picture overrules the mood table. ICON_TINT keeps the exact color, because
+# the icon tint can take one; the accent has to snap to the nearest of macOS's
+# eight, which is all that setting can hold.
+ICON_TINT="$ACCENT_NAME"
+COLOR_FROM="mood"
+if [[ "${MW_TINT_FROM_WALLPAPER:-1}" == "1" && -n "$IMAGE" && -f "$IMAGE" && -x "$MOODTOOL" ]]; then
+	if tint_info=$("$MOODTOOL" image-tint "$IMAGE" 2>/dev/null); then
+		IFS=$'\t' read -r wp_hex wp_name wp_index <<<"$tint_info"
+		if [[ "$wp_hex" == \#* && "$wp_index" =~ ^-?[0-9]+$ ]]; then
+			ACCENT="$wp_index"
+			ACCENT_NAME="$wp_name"
+			ICON_TINT="$wp_hex"
+			COLOR_FROM="wallpaper"
+		fi
+	fi
+fi
 
 # Dark is the default; only the moods listed in LIGHT_MOODS go light. Set
 # LIGHT_MOODS="" in config.conf for dark mode always.
@@ -118,18 +145,22 @@ if [[ "${MW_SET_ICON_THEME:-0}" == "1" ]]; then
 	# is exactly right for 'focused' — it is a real color choice, not a fallback.
 	if [[ "$THEME" == "off" ]]; then
 		ICONS_OUT="off"
-	elif ! out=$("$MOODTOOL" icon-theme "$THEME" "$ACCENT_NAME" 2>&1); then
+	elif ! out=$("$MOODTOOL" icon-theme "$THEME" "$ICON_TINT" 2>&1); then
 		# An older macOS has no such setting; that is not a failure, just an
 		# absent feature, and it must not mark the run as broken.
 		if [[ "$out" == *"no icon appearance setting"* ]]; then
 			ICONS_OUT="unsupported"
 		else
-			ICONS_OUT="${THEME}/${ACCENT_NAME}!"
+			ICONS_OUT="${THEME}/${ICON_TINT}!"
 			echo "set-appearance: icon theme change failed: $out" >&2
 		fi
 	else
 		IFS=$'\t' read -r got_theme got_tint <<<"$out"
+		# "other" is the enum name for a custom color and says nothing useful in
+		# a log line; report the color that was actually used.
+		[[ "$got_tint" == "other" ]] && got_tint="$ICON_TINT"
 		ICONS_OUT="${got_theme}/${got_tint}"
+		[[ "$COLOR_FROM" == "wallpaper" ]] && ICONS_OUT="${ICONS_OUT}~wp"
 	fi
 fi
 
