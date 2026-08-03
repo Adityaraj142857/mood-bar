@@ -50,16 +50,24 @@ cp "$ROOT"/src/* "$SANDBOX/src/"
 [[ -x "$MOODTOOL" ]] && cp "$MOODTOOL" "$SANDBOX/bin/"
 # Deliberately no config.conf: the sandbox must not inherit real API keys.
 
-# The desktop picture is global state. Remember it and put it back.
+# The desktop picture and the system icon style are global state. Remember both
+# and put them back, or a test run leaves the machine visibly rearranged.
 ORIGINAL_WALLPAPER=""
+ORIGINAL_ICONS=""
 if [[ -x "$MOODTOOL" ]]; then
 	ORIGINAL_WALLPAPER=$("$MOODTOOL" wallpaper-current 2>/dev/null | /usr/bin/head -1 | /usr/bin/cut -f2)
+	ORIGINAL_ICONS=$("$MOODTOOL" icon-theme-current 2>/dev/null)
 fi
 
 cleanup() {
 	if [[ -n "$ORIGINAL_WALLPAPER" && -f "$ORIGINAL_WALLPAPER" ]]; then
 		"$MOODTOOL" wallpaper "$ORIGINAL_WALLPAPER" >/dev/null 2>&1 &&
 			printf '\nrestored the original wallpaper (%s)\n' "$(basename "$ORIGINAL_WALLPAPER")"
+	fi
+	if [[ -n "$ORIGINAL_ICONS" ]]; then
+		IFS=$'\t' read -r otheme otint <<<"$ORIGINAL_ICONS"
+		"$MOODTOOL" icon-theme "$otheme" "$otint" >/dev/null 2>&1 &&
+			printf 'restored the original icon style (%s/%s)\n' "$otheme" "$otint"
 	fi
 	rm -rf "$WORK"
 }
@@ -355,12 +363,43 @@ fi
 
 echo "== appearance"
 for m in night happy; do
-	out=$(MW_SET_DARKMODE=0 MW_SET_ACCENT=0 bash "$SANDBOX/lib/set-appearance.sh" "$m")
-	check "disabled knobs report off ($m)" "$out" "$(printf 'off\toff')"
+	out=$(MW_SET_DARKMODE=0 MW_SET_ACCENT=0 MW_SET_ICON_THEME=0 \
+		bash "$SANDBOX/lib/set-appearance.sh" "$m")
+	check "disabled knobs report off ($m)" "$out" "$(printf 'off\toff\toff')"
 done
-out=$(MW_SET_DARKMODE=0 MW_SET_ACCENT=0 bash "$SANDBOX/lib/set-appearance.sh" bogus-mood)
-check "an unknown mood still returns two fields" \
-	"$(printf '%s' "$out" | /usr/bin/awk -F'\t' '{print NF}')" "2"
+out=$(MW_SET_DARKMODE=0 MW_SET_ACCENT=0 MW_SET_ICON_THEME=0 \
+	bash "$SANDBOX/lib/set-appearance.sh" bogus-mood)
+check "an unknown mood still returns three fields" \
+	"$(printf '%s' "$out" | /usr/bin/awk -F'\t' '{print NF}')" "3"
+
+echo "== system icon style (macOS 26+)"
+if "$MOODTOOL" icon-theme-current >/dev/null 2>&1; then
+	check "icon-theme-current returns theme and tint" \
+		"$("$MOODTOOL" icon-theme-current | /usr/bin/awk -F'\t' '{print NF}')" "2"
+	# Round-trip through two clearly different tints.
+	check "setting a tint sticks" "$("$MOODTOOL" icon-theme tinted red)" "$(printf 'tinted\tred')"
+	check "and reads back" "$("$MOODTOOL" icon-theme-current)" "$(printf 'tinted\tred')"
+	check "a different tint also sticks" "$("$MOODTOOL" icon-theme tinted blue)" "$(printf 'tinted\tblue')"
+	check "a non-tinted theme sticks" "$("$MOODTOOL" icon-theme clear)" "$(printf 'clear\tblue')"
+	"$MOODTOOL" icon-theme banana >/dev/null 2>&1 &&
+		no "an unknown icon theme is rejected" || ok "an unknown icon theme is rejected"
+	# Every accent the mood table can produce must be a tint the setter accepts,
+	# or that mood would log a failure every time it came up.
+	badtint=0
+	for c in red orange yellow green blue purple pink graphite; do
+		"$MOODTOOL" icon-theme tinted "$c" >/dev/null 2>&1 || badtint=$((badtint + 1))
+	done
+	check "every mood accent is a valid tint" "$badtint" "0"
+	# The mood pipeline must drive it end to end, not just the binary.
+	out=$(MW_SET_DARKMODE=0 MW_SET_ACCENT=0 MW_SET_ICON_THEME=1 \
+		bash "$SANDBOX/lib/set-appearance.sh" romantic | /usr/bin/cut -f3)
+	check "the pipeline tints icons from the mood" "$out" "tinted/pink"
+	out=$(MW_SET_DARKMODE=0 MW_SET_ACCENT=0 MW_SET_ICON_THEME=1 MW_ICON_THEME=off \
+		bash "$SANDBOX/lib/set-appearance.sh" romantic | /usr/bin/cut -f3)
+	check "MW_ICON_THEME=off leaves icons alone" "$out" "off"
+else
+	skip "icon style (this macOS has no icon appearance setting)"
+fi
 
 echo "== wallpaper: every Space, verified"
 TESTIMG="$WORK/wallpaper-test.jpg"
@@ -392,7 +431,12 @@ check "an unknown flag is rejected" "$(mw --nonsense 2>&1 >/dev/null | /usr/bin/
 contains "--set-mood rejects an unknown mood" "$(mw --set-mood not-a-mood 2>&1 >/dev/null)" "unknown mood"
 contains "--set-mood rejects bad hours" "$(mw --set-mood happy abc 2>&1 >/dev/null)" "positive integer"
 contains "--dry-run changes nothing" "$(FORCE_OFFLINE=1 mw --dry-run)" "dry run"
-contains "--explain works without touching state" "$(mw --explain)" "SIGNALS OBSERVED"
+# Fixture plus a disabled night window (NIGHT_START == NIGHT_END): run bare,
+# this asserts the score table but prints the night rule instead between 23:00
+# and 06:00, and a test that only passes in the daytime is worse than no test.
+fixture 14 5 com.microsoft.VSCode Code 4 "" "" ""
+contains "--explain works without touching state" \
+	"$(MW_SIGNALS_FILE="$WORK/signals" NIGHT_START=0 NIGHT_END=0 mw --explain)" "SIGNALS OBSERVED"
 [[ -f "$SANDBOX/state/last-run" ]] && no "--dry-run and --explain leave no last-run" ||
 	ok "--dry-run and --explain leave no last-run"
 

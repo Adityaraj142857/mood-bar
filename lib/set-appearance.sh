@@ -1,11 +1,15 @@
 #!/bin/bash
-# set-appearance.sh <mood> — match macOS light/dark mode and accent color to a mood.
+# set-appearance.sh <mood> — match macOS light/dark mode, accent color and icon
+# style to a mood.
 #
-# Prints:  <light|dark|light!|dark!|off>\t<accent-name|accent-name!|off>
+# Prints:  <mode>\t<accent>\t<icons>
+#   mode    light | dark | off        accent  <color> | off
+#   icons   <theme>/<tint> | off | unsupported
 #
-# A trailing "!" means the change was requested but the system did not end up in
-# that state — same principle as the wallpaper setter: never report a change we
-# did not confirm. "off" means the knob is disabled in config.conf.
+# A trailing "!" on any field means the change was requested but the system did
+# not end up in that state — same principle as the wallpaper setter: never
+# report a change we did not confirm. "off" means the knob is disabled in
+# config.conf.
 #
 # Dark mode flips immediately. The accent color is written to the global domain
 # and a change notification is posted; apps that listen repaint right away, the
@@ -99,4 +103,34 @@ if [[ "${MW_SET_ACCENT:-1}" == "1" ]]; then
 	fi
 fi
 
-printf '%s\t%s\n' "$MODE" "$ACCENT_OUT"
+# ------------------------------------------------------------------ icon style
+# macOS 26's system-wide icon tint. This is what themes the Dock: Dock icons
+# live inside each .app bundle, the system ones are SIP-protected, and editing
+# a third-party one breaks its signature — so the supported setting is the only
+# route. It restyles desktop icons, Launchpad and Finder sidebars along with it.
+#
+# The mood's accent color doubles as the tint, so the icons, the highlight color
+# and the wallpaper all agree.
+ICONS_OUT="off"
+if [[ "${MW_SET_ICON_THEME:-0}" == "1" ]]; then
+	THEME="${MW_ICON_THEME:-tinted}"
+	# Graphite has no tinted equivalent that reads as anything but grey, which
+	# is exactly right for 'focused' — it is a real color choice, not a fallback.
+	if [[ "$THEME" == "off" ]]; then
+		ICONS_OUT="off"
+	elif ! out=$("$MOODTOOL" icon-theme "$THEME" "$ACCENT_NAME" 2>&1); then
+		# An older macOS has no such setting; that is not a failure, just an
+		# absent feature, and it must not mark the run as broken.
+		if [[ "$out" == *"no icon appearance setting"* ]]; then
+			ICONS_OUT="unsupported"
+		else
+			ICONS_OUT="${THEME}/${ACCENT_NAME}!"
+			echo "set-appearance: icon theme change failed: $out" >&2
+		fi
+	else
+		IFS=$'\t' read -r got_theme got_tint <<<"$out"
+		ICONS_OUT="${got_theme}/${got_tint}"
+	fi
+fi
+
+printf '%s\t%s\t%s\n' "$MODE" "$ACCENT_OUT" "$ICONS_OUT"

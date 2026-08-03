@@ -455,6 +455,99 @@ func emitSignals() {
     }
 }
 
+// MARK: - icon appearance (macOS 26+)
+//
+// macOS 26 added "Icon & widget style" — Default / Dark / Clear / Tinted with a
+// tint color — which restyles every app icon system-wide: the Dock, the desktop,
+// Launchpad, Finder sidebars. Driving it from the mood is the only way to theme
+// the Dock at all: Dock icons live inside each .app bundle, system ones are
+// SIP-protected, and editing third-party ones breaks their code signature.
+//
+// The three AppleIconAppearance* keys in NSGlobalDomain are only a mirror of the
+// real state. Writing them with `defaults` changes nothing on screen — the
+// System Settings pane goes through SLSIconAppearanceConfiguration in SkyLight,
+// and so does this. The enum values below were established empirically by
+// setting each one and reading back the string it mirrors into the domain.
+//
+// SkyLight is private. Everything here is written to fail soft: if the class or
+// its selectors ever go away, this reports that and exits non-zero, and the
+// caller treats icon theming as unavailable rather than the run as failed.
+
+let iconThemes: [String: Int] = [
+    "default": 1,  // the stock multicolour icons
+    "dark": 2,  // "RegularDark"
+    "clear": 3, "clear-light": 4, "clear-dark": 5,
+    "tinted": 6, "tinted-light": 7, "tinted-dark": 8,
+]
+let iconTints: [String: Int] = [
+    "hardware": 1, "red": 2, "orange": 3, "yellow": 4, "green": 5,
+    "blue": 6, "purple": 7, "pink": 8, "graphite": 9, "other": 10,
+]
+
+func iconThemeName(_ value: Int) -> String {
+    iconThemes.first { $0.value == value }?.key ?? "unknown(\(value))"
+}
+func iconTintName(_ value: Int) -> String {
+    iconTints.first { $0.value == value }?.key ?? "none"
+}
+
+/// The live configuration object, or nil if this macOS has no such concept.
+func currentIconConfiguration() -> AnyObject? {
+    _ = dlopen(
+        "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/SkyLight", RTLD_LAZY)
+    guard let cls = NSClassFromString("SLSIconAppearanceConfiguration") else { return nil }
+    // As AnyObject, so the metaclass takes the ObjC `perform` rather than
+    // Swift's AnyClass, which has no such method.
+    let factory = cls as AnyObject
+    let fetch = NSSelectorFromString("fetchCurrentIconAppearanceConfiguration")
+    guard factory.responds(to: fetch) else { return nil }
+    return factory.perform(fetch)?.takeUnretainedValue()
+}
+
+func reportIconAppearance() {
+    guard let cfg = currentIconConfiguration() else {
+        die("moodtool: this macOS has no icon appearance setting")
+    }
+    let theme = cfg.value(forKey: "iconAppearanceTheme") as? Int ?? -1
+    let tint = cfg.value(forKey: "iconTintColorName") as? Int ?? -1
+    print("\(iconThemeName(theme))\t\(iconTintName(tint))")
+}
+
+func setIconAppearance(theme themeName: String, tint tintName: String) {
+    guard let theme = iconThemes[themeName] else {
+        die("moodtool: unknown icon theme '\(themeName)'; one of: \(iconThemes.keys.sorted().joined(separator: " "))")
+    }
+    guard let cfg = currentIconConfiguration() else {
+        die("moodtool: this macOS has no icon appearance setting")
+    }
+
+    cfg.setValue(theme, forKey: "iconAppearanceTheme")
+    // A tint only shows through in the tinted themes; setting it under Clear or
+    // Default is harmless and means the color is already right if the user
+    // switches over later.
+    if let tint = iconTints[tintName] {
+        cfg.setValue(tint, forKey: "iconTintColorName")
+    }
+
+    let save = NSSelectorFromString("save")
+    guard cfg.responds(to: save) else { die("moodtool: icon appearance is not settable here") }
+    _ = cfg.perform(save)
+
+    // Same rule as everywhere else in this tool: read it back, never assume.
+    // The write is asynchronous, so give it a moment before checking.
+    usleep(300_000)
+    guard let after = currentIconConfiguration(),
+        let got = after.value(forKey: "iconAppearanceTheme") as? Int
+    else {
+        die("moodtool: could not read the icon appearance back")
+    }
+    if got != theme {
+        die("moodtool: icon theme did not stick (asked \(themeName), got \(iconThemeName(got)))")
+    }
+    let gotTint = after.value(forKey: "iconTintColorName") as? Int ?? -1
+    print("\(iconThemeName(got))\t\(iconTintName(gotTint))")
+}
+
 // MARK: - json
 //
 // Keypath syntax: dotted keys, [n] for index, [*] for "pick one at random".
@@ -517,6 +610,7 @@ guard let cmd = args.first else {
           gradient <mood> <out.png> [seed]   wallpaper <path>
           wallpaper-current                  wallpaper-verify <path>
           signals                            screensize
+          icon-theme <theme> [tint]          icon-theme-current
           json <keypath>                     accent <index> <highlight>
           notify-appearance
         """)
@@ -538,6 +632,13 @@ case "wallpaper-verify":
     verifyWallpaper(args[1])
 case "signals":
     emitSignals()
+case "icon-theme":
+    guard args.count >= 2 else {
+        die("usage: moodtool icon-theme <default|dark|clear|tinted|…> [tint-color]")
+    }
+    setIconAppearance(theme: args[1], tint: args.count >= 3 ? args[2] : "")
+case "icon-theme-current":
+    reportIconAppearance()
 case "json":
     guard args.count >= 2 else { die("usage: moodtool json <keypath>") }
     jsonExtract(args[1])

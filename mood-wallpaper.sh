@@ -67,6 +67,18 @@ export PREFER_OWN_IMAGES="${PREFER_OWN_IMAGES:-1}"
 export ANIME_SHARE="${ANIME_SHARE:-50}"
 export MW_SET_DARKMODE="${MW_SET_DARKMODE:-1}"
 export MW_SET_ACCENT="${MW_SET_ACCENT:-1}"
+# Off unless asked for: it restyles every app icon on the machine, which is a
+# bigger thing to opt into than a wallpaper.
+export MW_SET_ICON_THEME="${MW_SET_ICON_THEME:-0}"
+export MW_ICON_THEME="${MW_ICON_THEME:-tinted}"
+
+# Remember the icon style that was in place before this tool ever touched it,
+# once, so uninstall --restore can put it back years later.
+if [[ "$MW_SET_ICON_THEME" == "1" && ! -f "$STATE/original-icon-appearance" && -x "$MOODTOOL" ]]; then
+	if original_icons=$("$MOODTOOL" icon-theme-current 2>/dev/null); then
+		printf '%s\n' "$original_icons" >"$STATE/original-icon-appearance"
+	fi
+fi
 export LIGHT_MOODS="${LIGHT_MOODS-happy energetic}"
 export CURL_CONNECT_TIMEOUT="${CURL_CONNECT_TIMEOUT:-4}"
 export CURL_MAX_TIME="${CURL_MAX_TIME:-15}"
@@ -489,7 +501,7 @@ fi
 WP_OK=$(bash "$LIB/set-wallpaper.sh" "$IMG")
 WP_RC=$?
 
-IFS=$'\t' read -r MODE ACCENT < <(bash "$LIB/set-appearance.sh" "$MOOD")
+IFS=$'\t' read -r MODE ACCENT ICONS < <(bash "$LIB/set-appearance.sh" "$MOOD")
 
 # last-image only advances when the picture really went up, so --verify keeps
 # comparing against the last thing actually applied rather than the last thing
@@ -500,12 +512,14 @@ fi
 write_state "$STATE/last-mood" "$MOOD"
 write_state "$STATE/last-run" "$NOW"
 
-log "RUN mood=$MOOD via=$MOOD_SRC ($MOOD_DETAIL) | image=$IMG_SRC ($IMG_WHY) | file=$(basename "$IMG") | set=$WP_OK | appearance=$MODE accent=$ACCENT"
-record_history "$NOW" "$MOOD" "$MOOD_SRC" "$MOOD_DETAIL" "$IMG_SRC" "$(basename "$IMG")" "$WP_OK" "$MODE/$ACCENT"
+log "RUN mood=$MOOD via=$MOOD_SRC ($MOOD_DETAIL) | image=$IMG_SRC ($IMG_WHY) | file=$(basename "$IMG") | set=$WP_OK | appearance=$MODE accent=$ACCENT icons=${ICONS:-off}"
+record_history "$NOW" "$MOOD" "$MOOD_SRC" "$MOOD_DETAIL" "$IMG_SRC" "$(basename "$IMG")" "$WP_OK" "$MODE/$ACCENT/${ICONS:-off}"
 
 if ((WP_RC != 0)); then
 	echo "$(emoji_for "$MOOD")  $MOOD — but the wallpaper did not apply: $WP_OK" >&2
 	exit 1
 fi
 
-echo "$(emoji_for "$MOOD")  $MOOD — $IMG_SRC image, $MODE mode, $ACCENT accent — $WP_OK"
+summary="$(emoji_for "$MOOD")  $MOOD — $IMG_SRC image, $MODE mode, $ACCENT accent"
+[[ -n "${ICONS:-}" && "$ICONS" != "off" && "$ICONS" != "unsupported" ]] && summary="$summary, $ICONS icons"
+echo "$summary — $WP_OK"

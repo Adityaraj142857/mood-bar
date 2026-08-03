@@ -89,6 +89,28 @@ FALLBACK_USE_CACHE=1
 MW_SET_DARKMODE=1
 MW_SET_ACCENT=1
 
+# System-wide icon style, macOS 26+. Tints every app icon — the Dock, desktop
+# icons, Launchpad, Finder sidebars — with the mood's accent color.
+#
+# This is the only way to theme the Dock. Dock icons live inside each .app
+# bundle; the system ones are SIP-protected and editing a third-party one
+# breaks its code signature, so macOS's own setting is the only supported
+# route. It is driven through a private framework (SkyLight), because writing
+# the AppleIconAppearance* preferences directly changes nothing on screen.
+#
+# Off by default: restyling every icon on the machine is a bigger thing to opt
+# into than a wallpaper. `uninstall.sh --restore` puts back whatever style you
+# had before the first run.
+MW_SET_ICON_THEME=0
+
+# Which style to use when the above is on:
+#   tinted  = colored by the mood's accent (the only one that carries the mood)
+#   clear   = the translucent style, uncolored
+#   dark    = the dark monochrome style
+#   default = stock multicolour icons
+#   off     = same as MW_SET_ICON_THEME=0
+MW_ICON_THEME=tinted
+
 # Dark mode is the default. Only the moods listed here go light; every other
 # mood goes dark. Set to "" for dark mode always.
 LIGHT_MOODS="happy energetic"

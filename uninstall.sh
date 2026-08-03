@@ -29,6 +29,14 @@ rm -rf "$ROOT/state/lock"
 echo "Removed $PLIST and $BAR_PLIST."
 
 if [[ "${1:-}" == "--restore" ]]; then
+	# Put the system-wide icon style back the way it was before the first run.
+	if [[ -f "$ROOT/state/original-icon-appearance" && -x "$ROOT/bin/moodtool" ]]; then
+		IFS=$'\t' read -r theme tint <"$ROOT/state/original-icon-appearance"
+		if [[ -n "${theme:-}" ]] && "$ROOT/bin/moodtool" icon-theme "$theme" "${tint:-}" >/dev/null 2>&1; then
+			echo "Restored the icon style to ${theme}/${tint:-none}."
+		fi
+	fi
+
 	# The wallpaper this tool set stays on screen after the agent is gone, and
 	# it lives in cache/, which is not somewhere you want your desktop picture
 	# pointing at long-term. Hand the desktop back to a macOS default.

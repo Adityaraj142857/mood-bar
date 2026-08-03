@@ -1,9 +1,9 @@
 # mood-bar
 
-A macOS wallpaper that follows what you're actually doing. It reads the machine
-for signs of focus, load and tiredness, picks a mood from them, and matches your
-wallpaper, light/dark mode and accent color to it — with a one-emoji indicator in
-the menu bar so you always know which mood is on screen.
+A macOS desktop that follows what you're actually doing. It reads the machine for
+signs of focus, load and tiredness, picks a mood from them, and matches your
+wallpaper, light/dark mode, accent color and — optionally — every app icon in the
+Dock to it. A one-emoji menu bar indicator tells you which mood is on screen.
 
 <p align="center">
   <img src="docs/menu-bar.png" alt="The mood indicator in the macOS menu bar" width="360">
@@ -162,6 +162,48 @@ MOODBAR=0 ./install.sh
 
 ---
 
+## Theming the Dock and desktop icons
+
+Optional, macOS 26+. With `MW_SET_ICON_THEME=1`, every app icon on the machine —
+the Dock, desktop icons, Launchpad, Finder sidebars — is tinted with the mood's
+accent color, so `romantic` turns everything pink and `focused` turns it
+graphite.
+
+**This is the only way to theme the Dock.** Dock icons live inside each `.app`
+bundle. The system ones are SIP-protected, and editing a third-party one breaks
+its code signature, so no amount of icon-file swapping is a real answer. macOS 26
+added an "Icon & widget style" setting (Default / Dark / Clear / Tinted), and
+driving that is the supported route.
+
+The catch: the three `AppleIconAppearance*` keys in `NSGlobalDomain` are only a
+*mirror* of the real state. Writing them with `defaults` changes nothing on
+screen — verified by setting a red tint and diffing a screenshot against a blue
+one. System Settings goes through `SLSIconAppearanceConfiguration` in SkyLight,
+and so does `moodtool icon-theme`:
+
+```sh
+moodtool icon-theme-current      # -> "clear<TAB>other"
+moodtool icon-theme tinted pink  # fetch config, mutate, save, read back
+```
+
+SkyLight is a private framework and the enum values aren't published, so they
+were established empirically — set each one, read back the string it mirrors into
+the domain:
+
+| `iconAppearanceTheme` | | `iconTintColorName` | |
+|---|---|---|---|
+| 1 | Default | 1 | Hardware |
+| 2 | RegularDark | 2–9 | Red, Orange, Yellow, Green, Blue, Purple, Pink, Graphite |
+| 3–5 | Clear: Automatic / Light / Dark | 10 | Other (uses a custom RGBA) |
+| 6–8 | Tinted: Automatic / Light / Dark | | |
+
+Being private, it can break on any macOS update — so it fails soft. If the class
+or its selectors go missing the run reports `icons=unsupported` and carries on;
+it never turns an absent feature into a failed run. It's off by default, and
+`./uninstall.sh --restore` puts back the style you had before the first run.
+
+---
+
 ## Why setting a wallpaper needs a Swift binary
 
 On macOS 14+ the desktop picture lives in a per-Space store owned by
@@ -275,6 +317,7 @@ list. The knobs you're most likely to touch:
 | `MW_SKIP_WHEN_LOCKED` | `1` | Don't run while the screen is locked or asleep |
 | `LIGHT_MOODS` | `happy energetic` | Moods that go light; everything else dark |
 | `MW_SET_DARKMODE` / `MW_SET_ACCENT` | `1` | Set to `0` to leave appearance alone |
+| `MW_SET_ICON_THEME` | `0` | Tint every app icon (Dock included) with the mood color |
 
 ---
 
@@ -290,7 +333,7 @@ lib/set-appearance.sh    dark mode + accent, also verified
 lib/nowplaying.applescript
 src/moodtool.swift       wallpaper store, signals, gradients, JSON, accent
 src/moodbar.swift        the menu bar indicator
-test.sh                  132 tests, hermetic
+test.sh                  141 tests, hermetic
 state/history.tsv        one row per run — what --report reads
 mood.log                 human-readable log, self-rotating
 ```
@@ -306,7 +349,7 @@ Two launchd agents: `com.arshukla.moodwallpaper` (wakes every 15 min, exits) and
 ./test.sh
 ```
 
-132 tests, no API key required; network tests degrade to `SKIP` when offline.
+141 tests, no API key required; network tests degrade to `SKIP` when offline.
 
 They're hermetic. Orchestrator tests run against a throwaway copy of the project
 in `$TMPDIR`, so your real `mood.log`, `state/` and history never move. Engine
