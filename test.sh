@@ -402,6 +402,19 @@ if "$MOODTOOL" icon-theme-current >/dev/null 2>&1; then
 	check "a hex tint is accepted" "$("$MOODTOOL" icon-theme tinted '#3366cc' | /usr/bin/cut -f2)" "other"
 	"$MOODTOOL" icon-theme tinted '#zzz' >/dev/null 2>&1 &&
 		no "a malformed hex tint is rejected" || ok "a malformed hex tint is rejected"
+	# Re-setting the style already in effect must not save, because saving
+	# re-renders every icon on the machine. Timing is the only observable:
+	# the skip returns immediately, a real save waits out its verify.
+	"$MOODTOOL" icon-theme tinted '#3366cc' >/dev/null 2>&1
+	start=$(date +%s%N 2>/dev/null || echo 0)
+	"$MOODTOOL" icon-theme tinted '#3366cc' >/dev/null 2>&1
+	elapsed=$((($(date +%s%N 2>/dev/null || echo 300000000) - start) / 1000000))
+	((elapsed < 250)) && ok "re-setting the same icon style is a no-op (${elapsed}ms)" ||
+		no "re-setting the same icon style is a no-op (took ${elapsed}ms)"
+	# A custom colour compares by value, not by the name "Other" — otherwise
+	# every wallpaper-derived tint would look like a change and re-render.
+	check "a changed custom colour still applies" \
+		"$("$MOODTOOL" icon-theme tinted '#cc3366' | /usr/bin/cut -f2)" "other"
 else
 	skip "icon style (this macOS has no icon appearance setting)"
 fi
@@ -467,6 +480,22 @@ else
 fi
 out=$(bash "$SANDBOX/lib/set-wallpaper.sh" "$WORK/does-not-exist.jpg" 2>&1)
 contains "a missing file is reported, not swallowed" "$out" "FAILED"
+
+# Re-applying the picture already on screen must not rewrite the store or
+# restart WallpaperAgent: that repaints every Space for no reason.
+contains "re-applying the same picture is a no-op" \
+	"$("$MOODTOOL" wallpaper "$TESTIMG")" "unchanged=1"
+before=$(pgrep -x WallpaperAgent | /usr/bin/head -1)
+"$MOODTOOL" wallpaper "$TESTIMG" >/dev/null 2>&1
+after=$(pgrep -x WallpaperAgent | /usr/bin/head -1)
+check "and leaves WallpaperAgent alone" "$after" "$before"
+# ...but a genuinely different picture must still go through.
+"$MOODTOOL" gradient calm "$WORK/wallpaper-test2.jpg" 7 >/dev/null 2>&1
+out=$("$MOODTOOL" wallpaper "$WORK/wallpaper-test2.jpg")
+[[ "$out" == *"unchanged=1"* ]] && no "a different picture is still applied" ||
+	ok "a different picture is still applied"
+"$MOODTOOL" wallpaper-verify "$WORK/wallpaper-test2.jpg" >/dev/null 2>&1 &&
+	ok "and lands on every Space" || no "and lands on every Space"
 
 echo "== orchestrator (sandboxed)"
 mw() { bash "$SANDBOX/mood-wallpaper.sh" "$@"; }

@@ -109,18 +109,50 @@ final class MoodBar: NSObject, NSMenuDelegate {
 
     // MARK: rendering
 
+    /// What is currently drawn. Assigning to an NSStatusItem's button forces a
+    /// menu bar relayout even when the value is identical, so the last render is
+    /// remembered and a no-op refresh does nothing at all. Most refreshes are
+    /// no-ops: a single pipeline run rewrites state/ six or seven times, and the
+    /// backstop timer fires whether or not anything changed.
+    private var rendered: (title: String, dimmed: Bool, tip: String)?
+
     func refresh() {
         DispatchQueue.main.async {
             let mood = self.currentMood
-            self.item.button?.title = emoji(for: mood)
+            let paused = self.isPaused
+            let title = emoji(for: mood)
+            var tip = "Mood: \(mood)"
+            if let pin = self.pinned {
+                tip += " (pinned until \(pin.until.formatted(date: .omitted, time: .shortened)))"
+            }
+            if paused { tip += " — paused" }
+
+            let next = (title: title, dimmed: paused, tip: tip)
+            if let current = self.rendered, current == next { return }
+            self.rendered = next
+
+            self.item.button?.title = title
             // Dimmed rather than a second glyph: it reads as "not currently
             // doing anything" without taking any more width.
-            self.item.button?.appearsDisabled = self.isPaused
-            var tip = "Mood: \(mood)"
-            if let pin = self.pinned { tip += " (pinned until \(pin.until.formatted(date: .omitted, time: .shortened)))" }
-            if self.isPaused { tip += " — paused" }
+            self.item.button?.appearsDisabled = paused
             self.item.button?.toolTip = tip
         }
+    }
+
+    /// Collapse a burst of filesystem events into one refresh.
+    ///
+    /// Every state write is a temp file plus a rename, and a run touches
+    /// last-mood, last-run, last-image, history.tsv, the lock directory and a
+    /// signals sample — so one wallpaper change arrives as a dozen vnode events
+    /// within a few hundred milliseconds. Without this, each one was a separate
+    /// pass over the state directory.
+    private var pendingRefresh: DispatchWorkItem?
+
+    func scheduleRefresh() {
+        pendingRefresh?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.refresh() }
+        pendingRefresh = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
     /// Rebuilt on open so it always reflects the state on disk, and so nothing
@@ -244,16 +276,23 @@ final class MoodBar: NSObject, NSMenuDelegate {
         watchedDescriptor = fd
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd, eventMask: [.write, .delete, .rename], queue: .main)
-        source.setEventHandler { [weak self] in self?.refresh() }
+        source.setEventHandler { [weak self] in self?.scheduleRefresh() }
         source.setCancelHandler { close(fd) }
         source.resume()
         watcher = source
 
-        // Backstop for anything the vnode source misses (a state dir replaced
-        // wholesale, a network volume). Cheap: one file read a minute.
-        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        // Backstop for anything the vnode source misses (a state directory
+        // replaced wholesale, a network volume). Five minutes rather than one:
+        // the watcher above catches every real change within 400ms, so this only
+        // exists for the pathological case, and a refresh that changes nothing
+        // now costs two small file reads and no drawing at all.
+        let timer = Timer(timeInterval: 300, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+        // A generous tolerance lets the system coalesce this with timers it was
+        // already going to fire, instead of waking the CPU on its own account.
+        timer.tolerance = 60
+        RunLoop.main.add(timer, forMode: .common)
     }
 }
 

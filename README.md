@@ -42,6 +42,52 @@ for `swiftc`. No Homebrew, no Python, no runtime dependencies.
 
 ---
 
+## Footprint
+
+Measured on an M-series MacBook, default settings (a wallpaper change at most
+every 30 minutes, launchd waking every 15):
+
+| | CPU | How often |
+|---|---|---|
+| Wake, decide nothing is due, exit | 0.03s | 96×/day |
+| Full run, with a download | 0.86s | ≤48×/day |
+| Full run, offline | 0.55s | — |
+| Menu bar indicator, resident | ~2.8s | per day, total |
+
+**≈45 seconds of CPU per day**, or about 0.05% of one core. A full run takes
+~8s of wall-clock time but only 0.86s of CPU — the rest is waiting on the image
+download, during which the CPU is idle.
+
+Things that were slower than they needed to be, and now aren't:
+
+| | Before | After |
+|---|---|---|
+| Reading a wallpaper's colour | 133ms | 30ms |
+| Re-applying the picture already on screen | 759ms | 42ms |
+| Re-applying the appearance already in effect | 535ms | 34ms |
+| Menu bar indicator, idle | ~10s/day | ~2.8s/day |
+
+The wins are mostly about *not doing work*: skipping the wallpaper store write
+and the `WallpaperAgent` restart when the picture is already up, skipping the
+icon-style save when it is already in effect (saving re-renders every icon on
+the machine), and decoding wallpapers straight to thumbnail size instead of
+unpacking 4K to throw away 99.9% of the pixels.
+
+The menu bar indicator no longer redraws on every check — assigning to a status
+item forces a menu bar relayout even when the value is identical, so it now
+compares against what is already drawn and does nothing if they match. A burst
+of state writes from one run is coalesced into a single refresh, and the backstop
+timer runs every 5 minutes with a 60s tolerance so the system can fold it into
+wakeups it was making anyway.
+
+On the shell side, `detect-mood.sh` used to fork `awk` once per signal — eleven
+processes to read eleven strings already in memory — and now parses the sample
+with shell builtins. The now-playing AppleScript costs 0.2–0.6s and is the
+single most expensive thing in a run, so it is skipped entirely unless
+`NSWorkspace` has already reported that a music app is running.
+
+---
+
 ## Install
 
 ```sh
@@ -359,7 +405,7 @@ lib/set-appearance.sh    dark mode + accent, also verified
 lib/nowplaying.applescript
 src/moodtool.swift       wallpaper store, signals, gradients, JSON, accent
 src/moodbar.swift        the menu bar indicator
-test.sh                  153 tests, hermetic
+test.sh                  159 tests, hermetic
 state/history.tsv        one row per run — what --report reads
 mood.log                 human-readable log, self-rotating
 ```
@@ -375,7 +421,7 @@ Two launchd agents: `com.arshukla.moodwallpaper` (wakes every 15 min, exits) and
 ./test.sh
 ```
 
-153 tests, no API key required; network tests degrade to `SKIP` when offline.
+159 tests, no API key required; network tests degrade to `SKIP` when offline.
 
 They're hermetic. Orchestrator tests run against a throwaway copy of the project
 in `$TMPDIR`, so your real `mood.log`, `state/` and history never move. Engine

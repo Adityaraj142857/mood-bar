@@ -327,6 +327,19 @@ func setWallpaper(_ path: String) {
 
     let target = url.absoluteString
 
+    // Already showing everywhere? Then don't rewrite the store and don't
+    // restart the agent. Restarting WallpaperAgent makes every Space repaint,
+    // which is real work and a visible flicker, and doing it to arrive at the
+    // picture already on screen is pure waste.
+    let wanted = canonicalPath(url.path)
+    let existing = desktopSlotURLs((try? loadStore()) ?? [:])
+    if !existing.isEmpty,
+        existing.allSatisfy({ canonicalPath(URL(string: $0)?.path ?? $0) == wanted })
+    {
+        print("method=store slots=\(existing.count) verified=\(existing.count) unchanged=1")
+        exit(0)
+    }
+
     // Two attempts: WallpaperAgent can be mid-flush on the first one, in which
     // case its own write lands on top of ours and verification catches it.
     for attempt in 1...2 {
@@ -345,11 +358,18 @@ func setWallpaper(_ path: String) {
             // re-read and repaint. It is an on-demand LaunchAgent, so it comes
             // straight back. (launchctl kickstart is blocked by SIP.)
             run("/usr/bin/killall", ["WallpaperAgent"])
-            usleep(600_000)
 
-            // Verify against the file the agent has now had a chance to rewrite.
-            let after = desktopSlotURLs(try loadStore())
-            let stale = after.filter { $0 != target }.count
+            // Poll rather than sleeping a flat 600ms. The agent usually settles
+            // in well under that, and on the occasions it needs longer a fixed
+            // wait would have been too short anyway.
+            var after: [String] = []
+            var stale = 1
+            for _ in 0..<20 {
+                usleep(50_000)
+                after = desktopSlotURLs((try? loadStore()) ?? [:])
+                stale = after.filter { $0 != target }.count
+                if stale == 0 && !after.isEmpty { break }
+            }
             if stale == 0 && !after.isEmpty {
                 print("method=store slots=\(slots) verified=\(after.count)")
                 exit(0)
@@ -485,14 +505,24 @@ let iconTints: [String: Int] = [
 ]
 
 /// "#rrggbb" -> CGColor, for the "Other" tint slot.
+///
+/// The colour space is stated explicitly, and that matters. CGColor's
+/// convenience initialiser builds a *Generic RGB* colour — the legacy gamma-1.8
+/// space — and macOS stores the tint as sRGB, so it silently gamma-converted
+/// everything on the way in: #3366cc (0.20, 0.40, 0.80) came back out as
+/// (0.25, 0.49, 0.84), a visibly lighter tint than the wallpaper it was read
+/// from. Building the colour in sRGB to begin with makes it round-trip exactly.
 func parseHexColor(_ text: String) -> CGColor? {
     let hex = text.hasPrefix("#") ? String(text.dropFirst()) : text
     guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return nil }
-    return CGColor(
-        red: CGFloat((value >> 16) & 0xFF) / 255,
-        green: CGFloat((value >> 8) & 0xFF) / 255,
-        blue: CGFloat(value & 0xFF) / 255,
-        alpha: 1)
+    let components: [CGFloat] = [
+        CGFloat((value >> 16) & 0xFF) / 255,
+        CGFloat((value >> 8) & 0xFF) / 255,
+        CGFloat(value & 0xFF) / 255,
+        1,
+    ]
+    guard let srgb = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+    return CGColor(colorSpace: srgb, components: components)
 }
 
 func iconThemeName(_ value: Int) -> String {
@@ -581,12 +611,24 @@ func hsbToRGB(_ c: HSB) -> (Double, Double, Double) {
 /// entirely because their hue is meaningless.
 func dominantTint(ofImage path: String) -> HSB? {
     let url = URL(fileURLWithPath: path)
-    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-        let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
-    else { return nil }
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
 
     // 64x64 is plenty: this is a hue histogram, not a thumbnail.
     let side = 64
+
+    // Decode straight to thumbnail size. Fully decoding a 4K wallpaper to
+    // immediately throw 99.9% of the pixels away costs about ten times as much,
+    // and JPEG can scale during decode for free.
+    let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceThumbnailMaxPixelSize: side * 2,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceShouldCacheImmediately: true,
+    ]
+    guard
+        let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+            ?? CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else { return nil }
     var pixels = [UInt8](repeating: 0, count: side * side * 4)
     let space = CGColorSpaceCreateDeviceRGB()
     guard
@@ -679,12 +721,52 @@ func reportImageTint(_ path: String) {
     print("\(hex)\t\(accent.name)\t\(accent.index)")
 }
 
+/// The custom tint currently in effect. Not KVC-compliant — the getter returns
+/// a CGColorRef — so it is reached through its IMP.
+func currentOtherTintColor(_ cfg: AnyObject) -> CGColor? {
+    let sel = NSSelectorFromString("otherIconTintColor")
+    guard let method = class_getInstanceMethod(type(of: cfg), sel) else { return nil }
+    typealias GetColor = @convention(c) (AnyObject, Selector) -> Unmanaged<CGColor>?
+    let imp = unsafeBitCast(method_getImplementation(method), to: GetColor.self)
+    return imp(cfg, sel)?.takeUnretainedValue()
+}
+
+/// Equal to within a 1/255 step — the colours round-trip through 8-bit hex, so
+/// exact float equality would never hold.
+func sameColor(_ a: CGColor, _ b: CGColor) -> Bool {
+    guard let x = a.components, let y = b.components, x.count >= 3, y.count >= 3 else {
+        return false
+    }
+    return (0..<3).allSatisfy { abs(x[$0] - y[$0]) < 0.004 }
+}
+
 func setIconAppearance(theme themeName: String, tint tintName: String) {
     guard let theme = iconThemes[themeName] else {
         die("moodtool: unknown icon theme '\(themeName)'; one of: \(iconThemes.keys.sorted().joined(separator: " "))")
     }
     guard let cfg = currentIconConfiguration() else {
         die("moodtool: this macOS has no icon appearance setting")
+    }
+
+    // Saving forces every icon on the system to re-render, so don't save a
+    // configuration that is already in effect. Worth doing properly for the
+    // custom-colour case too: with the tint coming from the wallpaper the name
+    // is always "Other", so comparing names alone would never match and every
+    // run would re-render the whole icon set.
+    let haveTheme = cfg.value(forKey: "iconAppearanceTheme") as? Int
+    let haveTint = cfg.value(forKey: "iconTintColorName") as? Int
+    if haveTheme == theme {
+        if tintName.hasPrefix("#") {
+            if let want = parseHexColor(tintName), haveTint == iconTints["other"],
+                let have = currentOtherTintColor(cfg), sameColor(have, want)
+            {
+                print("\(iconThemeName(theme))\t\(iconTintName(haveTint!))")
+                exit(0)
+            }
+        } else if let wantTint = iconTints[tintName], haveTint == wantTint {
+            print("\(iconThemeName(theme))\t\(iconTintName(wantTint))")
+            exit(0)
+        }
     }
 
     cfg.setValue(theme, forKey: "iconAppearanceTheme")

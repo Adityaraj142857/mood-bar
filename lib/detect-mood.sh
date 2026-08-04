@@ -71,22 +71,26 @@ SIGNALS=$(bash "$HERE/signals.sh") || {
 	exit 1
 }
 
-sig() {
-	# Exact key match on the first tab-separated field. Missing key -> "".
-	printf '%s\n' "$SIGNALS" | /usr/bin/awk -F'\t' -v k="$1" '$1==k{sub(/^[^\t]*\t/,"");print;exit}'
-}
-
-hour=$(sig hour)
-idle=$(sig idle_seconds)
-front_bundle=$(sig frontmost_bundle)
-front_name=$(sig frontmost_name)
-app_count=$(sig app_count)
-apps=$(sig apps)
-m_app=$(sig music_app)
-m_title=$(sig music_title)
-m_artist=$(sig music_artist)
-m_album=$(sig music_album)
-m_genre=$(sig music_genre)
+# One pass, no subprocesses. The previous version ran `awk` once per key, which
+# is eleven forks on the hot path to read eleven short strings that were already
+# in memory. `read` is a builtin, so this walks the sample entirely inside bash.
+hour="" idle="" front_bundle="" front_name="" app_count="" apps=""
+m_app="" m_title="" m_artist="" m_album="" m_genre=""
+while IFS=$'\t' read -r key value; do
+	case "$key" in
+	hour) hour="$value" ;;
+	idle_seconds) idle="$value" ;;
+	frontmost_bundle) front_bundle="$value" ;;
+	frontmost_name) front_name="$value" ;;
+	app_count) app_count="$value" ;;
+	apps) apps="$value" ;;
+	music_app) m_app="$value" ;;
+	music_title) m_title="$value" ;;
+	music_artist) m_artist="$value" ;;
+	music_album) m_album="$value" ;;
+	music_genre) m_genre="$value" ;;
+	esac
+done <<<"$SIGNALS"
 
 # Signals are advisory, never fatal: a garbled value becomes a neutral one.
 [[ "$hour" =~ ^[0-9]+$ ]] || hour=$(date +%-H)

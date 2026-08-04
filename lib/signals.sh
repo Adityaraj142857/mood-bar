@@ -47,14 +47,17 @@ emit() {
 }
 
 # ------------------------------------------------------------------ clock
-now=$(date +%s)
+# One `date` for all three fields: three separate calls were three forks for
+# information the first one already had.
+IFS=$'\t' read -r now hour weekday < <(date '+%s	%-H	%u')
 emit now_epoch "$now"
-emit hour "$(date +%-H)"
-emit weekday "$(date +%u)" # 1=Monday .. 7=Sunday
+emit hour "$hour"
+emit weekday "$weekday" # 1=Monday .. 7=Sunday
 
 # ------------------------------------------------------------------ machine
 # moodtool emits its own "key\tvalue" lines; pass them straight through, but
 # only if it actually ran, so a missing binary degrades instead of exploding.
+machine=""
 if [[ -x "$MOODTOOL" ]] && machine=$("$MOODTOOL" signals 2>/dev/null); then
 	printf '%s\n' "$machine"
 else
@@ -73,9 +76,24 @@ fi
 
 # ------------------------------------------------------------------ music
 # Never launches a music app; reports only what is already running and playing.
+#
+# The AppleScript costs 0.2-0.6s, by far the most expensive thing in a run, and
+# most of that is asking System Events whether Spotify or Music is running. We
+# already know: moodtool listed every running app a moment ago, for free, from
+# NSWorkspace. So the whole round-trip is skipped unless a music app is actually
+# open — which on a typical machine is most of the time.
 np=""
 if [[ "${MW_READ_MUSIC:-1}" == "1" ]]; then
-	np=$(/usr/bin/osascript "$HERE/nowplaying.applescript" 2>/dev/null) || np=""
+	music_running=1
+	if [[ -n "$machine" ]]; then
+		music_running=0
+		case "$machine" in
+		*com.spotify.client* | *com.apple.Music* | *com.apple.iTunes*) music_running=1 ;;
+		esac
+	fi
+	if ((music_running)); then
+		np=$(/usr/bin/osascript "$HERE/nowplaying.applescript" 2>/dev/null) || np=""
+	fi
 fi
 if [[ -n "$np" ]]; then
 	IFS=$'\t' read -r m_app m_title m_artist m_album m_genre <<<"$np"
